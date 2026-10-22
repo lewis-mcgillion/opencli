@@ -1,0 +1,6 @@
+node_modules/
+logs/
+snapshots/
+out.txt
+*.bak
+.DS_Store
