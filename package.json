@@ -1,0 +1,21 @@
+{
+  "name": "llmcli",
+  "version": "0.2.0",
+  "scripts": {
+    "start": "tsx llmcli.ts",
+    "check": "tsc --noEmit --skipLibCheck --target ES2020 --moduleResolution bundler --module esnext --types node llmcli.ts",
+    "test": "tsx tests/run.ts",
+    "auto": "tsx auto.ts"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5"
+  }
+}
