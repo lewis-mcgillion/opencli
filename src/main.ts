@@ -190,7 +190,7 @@ async function main(): Promise<number> {
   const interactiveTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   let config: Config = loadConfig({ cwd, env: process.env });
   if (config.projectTrustNeeded) {
-    if (interactiveTerminal && (await confirm(`This project defines MCP servers, hooks, permissions, sandbox settings or a verify command (${cwd}/.opencli or .llmcli). Trust them?`))) {
+    if (interactiveTerminal && (await confirm(`This project defines trust-sensitive settings such as model routing, MCP servers, hooks, permissions, sandbox settings or a verify command (${cwd}/.opencli or .llmcli). Trust them?`))) {
       trustProject(cwd, projectFingerprintFor(cwd));
       config = loadConfig({ cwd, env: process.env, trustProject: true });
     } else {

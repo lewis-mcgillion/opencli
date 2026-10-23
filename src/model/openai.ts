@@ -35,9 +35,17 @@ export function createOpenAIProvider(opts: OpenAIOptions): ModelProvider {
       let text = "";
       const calls: Array<ToolCall | undefined> = [];
       let usage: ChatResult["usage"];
+      let done = false;
       for await (const event of readSse(res.body)) {
-        if (event.data === "[DONE]") break;
+        if (event.data === "[DONE]") {
+          done = true;
+          break;
+        }
         const parsed = JSON.parse(event.data);
+        if (parsed.error) {
+          const message = typeof parsed.error === "string" ? parsed.error : parsed.error.message ?? JSON.stringify(parsed.error);
+          throw new Error(`OpenAI stream error: ${message}`);
+        }
         if (parsed.usage) {
           usage = { input: parsed.usage.prompt_tokens ?? 0, output: parsed.usage.completion_tokens ?? 0 };
         }
@@ -58,6 +66,7 @@ export function createOpenAIProvider(opts: OpenAIOptions): ModelProvider {
           if (tc.function?.arguments) call.function.arguments += tc.function.arguments;
         }
       }
+      if (!done) throw new Error("OpenAI stream ended before [DONE]");
 
       const toolCalls = calls.filter((c): c is ToolCall => c !== undefined && c.function.name !== "");
       const message: Message = { role: "assistant", content: text };

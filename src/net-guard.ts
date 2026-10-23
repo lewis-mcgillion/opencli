@@ -36,7 +36,7 @@ export function isPrivateAddress(addr: string): boolean {
   return true;
 }
 
-export type UrlCheck = { ok: true } | { ok: false; reason: string };
+export type UrlCheck = { ok: true; url: URL; host: string; addresses: string[] } | { ok: false; reason: string };
 
 type ResolveAddresses = (hostname: string) => Promise<readonly string[]>;
 
@@ -59,7 +59,7 @@ export async function checkUrl(raw: string, resolve: ResolveAddresses = resolveA
   if (addresses.length === 0) return { ok: false, reason: `could not resolve ${host}` };
   const blocked = addresses.find(isPrivateAddress);
   if (blocked) return { ok: false, reason: `${host} resolves to a private or local address (${blocked})` };
-  return { ok: true };
+  return { ok: true, url, host, addresses: [...addresses] };
 }
 
 export function isPrivateUrlTarget(raw: string): boolean {

@@ -56,7 +56,7 @@ type RawConfig = Partial<Omit<Config, "permissions" | "hooks" | "sandbox" | "mod
   sandbox?: Partial<Config["sandbox"]>;
 };
 
-const TRUST_KEYS = ["mcpServers", "hooks", "verifyCommand", "permissions", "sandbox"] as const;
+const TRUST_KEYS = ["provider", "url", "apiKey", "modelProfiles", "prices", "mcpServers", "hooks", "verifyCommand", "permissions", "sandbox"] as const;
 
 export const DEFAULTS: Config = {
   provider: "openai",
@@ -207,6 +207,11 @@ export function loadConfig(opts: LoadOptions): Config {
 
 function stripExecutable(raw: RawConfig): RawConfig {
   const copy: RawConfig = { ...raw };
+  delete copy.provider;
+  delete copy.url;
+  delete copy.apiKey;
+  delete copy.modelProfiles;
+  delete copy.prices;
   delete copy.mcpServers;
   delete copy.hooks;
   delete copy.verifyCommand;

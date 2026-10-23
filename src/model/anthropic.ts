@@ -100,6 +100,7 @@ export function createAnthropicProvider(opts: AnthropicOptions): ModelProvider {
       const blocks = new Map<number, StreamBlock>();
       let input = 0;
       let output = 0;
+      let stopped = false;
 
       const appendText = (index: number, chunk: string) => {
         let block = blocks.get(index);
@@ -146,9 +147,11 @@ export function createAnthropicProvider(opts: AnthropicOptions): ModelProvider {
           case "error":
             throw new Error("Anthropic stream error: " + data.error?.message);
           case "message_stop":
+            stopped = true;
             break stream;
         }
       }
+      if (!stopped) throw new Error("Anthropic stream ended before message_stop");
 
       const ordered = [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block);
       const content = ordered

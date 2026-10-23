@@ -225,6 +225,21 @@ test("retries a 503 and reports the retry via onRetry", async () => {
   expect(result.message.content).toBe("ok");
 });
 
+test("throws when the stream ends before message_stop", async () => {
+  const srv = startServer(() =>
+    sse([
+      ["message_start", { type: "message_start", message: { usage: { input_tokens: 1, output_tokens: 0 } } }],
+      ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } }],
+    ]),
+  );
+
+  const provider = createAnthropicProvider({ url: srv.url, maxTokens: 64 });
+  await expect(
+    provider.chat({ model: "claude-test", messages: [{ role: "user", content: "hi" }], tools: [] }),
+  ).rejects.toThrow("Anthropic stream ended before message_stop");
+});
+
 test("non-retryable 400 throws an error containing the status", async () => {
   const srv = startServer(
     () =>

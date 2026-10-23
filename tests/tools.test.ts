@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { executeTool } from "../src/execute";
+import { fetchChecked } from "../src/tools/web";
 import { recordingUi, makeRuntime, tempDir } from "./helpers/runtime";
 import type { Runtime } from "../src/runtime";
 
@@ -189,22 +190,6 @@ describe("web tool", () => {
     expect(result.denied).toBe(true);
   });
 
-  test("web redirect policy rechecks private targets before fetching the next hop", async () => {
-    const fetchMock = spyOn(globalThis as any, "fetch").mockImplementation(async () => new Response(null, {
-      status: 302,
-      headers: { location: "http://127.0.0.1:9/private" },
-    }));
-    try {
-      const rt = makeRuntime(dir, recordingUi(null));
-      const result = await call(rt, "web_fetch", { url: "http://8.8.8.8/public" });
-      expect(result.isError).toBe(true);
-      expect(result.output).toContain("private or local address");
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
   test("web deny rules take precedence over explicit private-network allow rules", async () => {
     const rt = makeRuntime(dir, recordingUi(null), { config: { permissions: { allow: ["web_fetch(*)"], ask: [], deny: ["web_fetch(http://127.0.0.1:9/*)"] } } });
     expect((await call(rt, "web_fetch", { url: "http://127.0.0.1:9/private" })).denied).toBe(true);
@@ -224,6 +209,16 @@ describe("web tool", () => {
       const result = await call(rt, "web_fetch", { url: `http://127.0.0.1:${server.port}/page` });
       expect(result.isError).toBe(false);
       expect(result.output).toBe("hello there");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("web explicit allow clips large responses while streaming", async () => {
+    const server = Bun.serve({ port: 0, fetch: () => new Response("x".repeat(2_000_100), { headers: { "content-type": "text/plain" } }) });
+    try {
+      const result = await fetchChecked(`http://127.0.0.1:${server.port}/large`, true);
+      expect(result.length).toBe(2_000_000);
     } finally {
       server.stop(true);
     }

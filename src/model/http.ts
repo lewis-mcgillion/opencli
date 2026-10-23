@@ -6,7 +6,7 @@ export class ApiError extends Error {
 
 const RETRY_STATUS = new Set([408, 429, 500, 502, 503, 504, 529]);
 const MAX_ATTEMPTS = 6;
-const MAX_BACKOFF_MS = 60_000;
+const MAX_GENERATED_BACKOFF_MS = 60_000;
 
 function isConnectionError(e: any): boolean {
   const text = `${e?.message ?? ""} ${e?.cause?.code ?? ""} ${e?.code ?? ""}`;
@@ -24,24 +24,24 @@ function parseRetryAfter(headers: Headers): number | null {
   const msHeader = headers.get("retry-after-ms") ?? headers.get("x-ms-retry-after-ms");
   if (msHeader) {
     const ms = Number(msHeader);
-    if (Number.isFinite(ms) && ms >= 0) return Math.min(ms, MAX_BACKOFF_MS);
+    if (Number.isFinite(ms) && ms >= 0) return ms;
   }
 
   const retryAfter = headers.get("retry-after");
   if (!retryAfter) return null;
   const seconds = Number(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, MAX_BACKOFF_MS);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
 
   const dateMs = Date.parse(retryAfter);
-  if (Number.isFinite(dateMs)) return Math.min(Math.max(0, dateMs - Date.now()), MAX_BACKOFF_MS);
+  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
   return null;
 }
 
-function retryDelayMs(attempt: number, status?: number, headers?: Headers): number {
+export function retryDelayMs(attempt: number, status?: number, headers?: Headers): number {
   const fromHeaders = headers ? parseRetryAfter(headers) : null;
   if (fromHeaders !== null) return fromHeaders;
   const base = status === 429 ? 2000 : 1000;
-  return Math.min(base * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+  return Math.min(base * 2 ** (attempt - 1), MAX_GENERATED_BACKOFF_MS);
 }
 
 export interface PostOptions {
