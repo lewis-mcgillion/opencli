@@ -1,6 +1,6 @@
-# llmcli
+# OpenCLI
 
-A terminal coding agent for local and hosted language models. It reads and edits files, runs shell and git commands, searches code, fetches web pages, and talks to MCP tool servers. It works with any OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp) and with the Anthropic Messages API.
+A terminal coding agent for local and hosted language models. It reads and edits files, runs shell and git commands, searches code, fetches web pages, and talks to MCP tool servers. It works with OpenAI-compatible endpoints (Ollama, LM Studio, llama.cpp), Azure OpenAI / Foundry OpenAI, and the Anthropic Messages API.
 
 ## Install
 
@@ -9,9 +9,11 @@ Development needs [Bun](https://bun.sh) 1.3 or newer.
 ```sh
 bun install
 bun run src/main.ts --help
+bun run build
+./dist/opencli --help
 ```
 
-A standalone binary can be built with `bun run build` (writes `dist/llmcli`). The build is not yet verified in CI; see Status below.
+A standalone binary is written to `dist/opencli`. Add `dist` to your `PATH` to use the `opencli` commands below, or replace `opencli` with `bun run src/main.ts` when working from source. The package is currently private; global npm installation is not a supported install path.
 
 For a local model, start Ollama and pull a model that supports tool calls:
 
@@ -22,11 +24,11 @@ ollama pull gemma4:e4b
 ## Use
 
 ```sh
-llmcli                                   # full-screen TUI on a terminal
-llmcli "rename parseDate to parseIso"    # run one task and exit
-llmcli -p --output-format json "..."     # machine-readable result for scripts
-echo "summarise README.md" | llmcli -p   # task from stdin
-llmcli -c                                # resume the last session in this directory
+opencli                                   # full-screen TUI on a terminal
+opencli "rename parseDate to parseIso"    # run one task and exit
+opencli -p --output-format json "..."     # machine-readable result for scripts
+echo "summarise README.md" | opencli -p   # task from stdin
+opencli -c                                # resume the last session in this directory
 ```
 
 Inside the UI, type `/help` for commands. End a line with `\` to continue it, or use `/paste` for multi-line input. Mention files with `@./path` to include their contents.
@@ -35,11 +37,13 @@ Inside the UI, type `/help` for commands. End a line with `\` to continue it, or
 
 Settings come from three layers, later layers overriding earlier ones:
 
-1. `~/.llmcli/config.json`: your defaults.
-2. `.llmcli/settings.json` in the project: shared with the team.
-3. `.llmcli/settings.local.json` in the project: personal, not for commit.
+1. `~/.opencli/config.json`: your defaults.
+2. `.opencli/settings.json` in the project: shared with the team.
+3. `.opencli/settings.local.json` in the project: personal, not for commit.
 
-Environment variables override all of them: `LLMCLI_MODEL`, `LLMCLI_URL`, `LLMCLI_PROVIDER` (`openai` or `anthropic`), `LLMCLI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`.
+Environment variables override all of them: `OPENCLI_MODEL`, `OPENCLI_URL`, `OPENCLI_PROVIDER` (`openai`, `anthropic`, or `azure`), and `OPENCLI_API_KEY`. Provider-specific key fallbacks are `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `AZURE_OPENAI_API_KEY`; explicit CLI flags override settings and environment for normal task runs.
+
+Legacy configuration remains supported. See [Migration from LLMCLI](docs/migration.md) before creating new configuration directories.
 
 ```json
 {
@@ -71,11 +75,72 @@ Environment variables override all of them: `LLMCLI_MODEL`, `LLMCLI_URL`, `LLMCL
 
 ### Trust for project settings
 
-A project's `.llmcli/` settings can start processes (MCP servers, hooks, `verifyCommand`) and change permissions and the sandbox. Those keys are ignored until you trust the project. Interactive runs ask once; headless runs print a warning and skip them. Trust is stored per directory in `~/.llmcli/trust.json` and is revoked automatically when the project's settings change.
+A project's `.opencli/` settings can start processes (MCP servers, hooks, `verifyCommand`) and change permissions and the sandbox. Those keys are ignored until you trust the project. Interactive runs ask once; headless runs print a warning and skip them. Trust is stored per directory in `~/.opencli/trust.json` and is revoked automatically when the project's settings change.
+
+## Provider profiles
+
+`opencli models list` prints the built-in provider profiles (`local-openai`, `openai`, `azure-openai`, `anthropic`). `opencli models test <profile>` sends a small, potentially billable request without tools. Set `OPENCLI_MODEL`, `OPENCLI_URL`, and `OPENCLI_PROVIDER` for the target provider, plus its API key, before testing. A successful reply checks basic connectivity, not tool-call support or coding quality. Profile context sizes are defaults; adjust them for your chosen model.
+
+### Local OpenAI-compatible servers
+
+Use a loaded model with tool-call support and the server's model ID:
+
+```sh
+OPENCLI_PROVIDER=openai OPENCLI_URL=http://localhost:11434/v1 \
+  OPENCLI_MODEL=gemma4:e4b opencli "summarise README.md"
+```
+
+| Server | Setup | Typical base URL |
+| --- | --- | --- |
+| Ollama | Start Ollama and pull a tool-capable model | `http://localhost:11434/v1` |
+| LM Studio | Load a model and start its local API server | `http://localhost:1234/v1` |
+| llama.cpp | Start `llama-server` with a model and a chat template that supports tool calls | `http://localhost:8080/v1` |
+
+Replace the URL and model above for your server. Set `OPENCLI_API_KEY` if authentication is enabled. The adapter uses streaming Chat Completions; compatibility depends on the model and server configuration.
+
+### Hosted providers
+
+Supply secrets through your environment rather than committing them to project settings. For any hosted OpenAI-compatible endpoint, set `OPENCLI_PROVIDER=openai`, its `/v1` base URL, model ID, and `OPENCLI_API_KEY`. For the OpenAI API:
+
+```sh
+export OPENCLI_PROVIDER=openai
+export OPENCLI_URL=https://api.openai.com/v1
+export OPENCLI_MODEL=YOUR_MODEL_ID
+export OPENCLI_API_KEY="$OPENAI_API_KEY"
+opencli models test openai
+```
+
+For Anthropic, set `ANTHROPIC_API_KEY` first:
+
+```sh
+export OPENCLI_PROVIDER=anthropic
+export OPENCLI_URL=https://api.anthropic.com/v1
+export OPENCLI_MODEL=YOUR_CLAUDE_MODEL_ID
+export OPENCLI_API_KEY="$ANTHROPIC_API_KEY"
+opencli models test anthropic
+```
+
+The current Anthropic adapter returns a complete response rather than streaming text.
+
+For an Azure OpenAI deployment in Azure OpenAI or Foundry, set `AZURE_OPENAI_API_KEY` first:
+
+```sh
+export OPENCLI_PROVIDER=azure
+export OPENCLI_URL=https://YOUR-RESOURCE.openai.azure.com/openai/v1
+export OPENCLI_MODEL=YOUR_DEPLOYMENT_NAME
+export OPENCLI_API_KEY="$AZURE_OPENAI_API_KEY"
+opencli models test azure-openai
+```
+
+Use the OpenAI v1 base URL supplied by your resource, without `/chat/completions`; the model value is the deployment name. Azure mode sends an `api-key` header. Microsoft Entra token authentication and arbitrary Foundry model APIs are not implemented. Some reasoning deployments may need request options this adapter does not expose.
+
+### Rate limits and retries
+
+Model requests retry HTTP 429, selected transient HTTP errors, and connection failures, up to six attempts. Delays use `Retry-After` (seconds or HTTP date), `retry-after-ms`, or Azure's `x-ms-retry-after-ms` when valid; otherwise they use exponential backoff. Each delay is capped at 60 seconds, so longer server-requested waits are shortened. Retries do not increase your quota or automatically switch models. If limits persist, reduce concurrent agents and request volume, wait for your quota to recover, or choose another deployment with available quota.
 
 ### Project instructions
 
-`AGENTS.md` and `LLMCLI.md` in the project root are appended to the system prompt. `--show-system` prints the full prompt, and `--show-config` prints the resolved settings.
+`AGENTS.md`, `OPENCLI.md`, and legacy `LLMCLI.md` in the project root are appended to the system prompt, in that order, when present. Rename the legacy file when migrating to avoid loading duplicate instructions. `--show-system` prints the full prompt, and `--show-config` prints the resolved settings.
 
 ## Modes
 
@@ -109,14 +174,14 @@ What this does not protect against: a sandbox is only as strong as its backend, 
 | `/compact` | Summarise the conversation now (also happens automatically near the context limit) |
 | `/undo` | Revert the files changed by the last turn |
 | `/todos` | Show the todo list the agent keeps |
-| `/save <name>`, `/load <name>`, `/sessions` | Named sessions in `~/.llmcli/sessions` |
+| `/save <name>`, `/load <name>`, `/sessions` | Named sessions in `~/.opencli/sessions` |
 | `/sandbox` | Show sandbox status |
 | `/tools` | List tools |
 | `/mcp` | List MCP servers and their tools |
 | `/reset` | Clear the conversation |
 | `/help`, `/exit` | Help and quit |
 
-Custom commands are Markdown files in `.llmcli/commands/` (project) or `~/.llmcli/commands/` (user). `$ARGUMENTS` is replaced by the text after the command name. A frontmatter line `allowed-tools: read_file, grep_files` restricts the tools for that turn. MCP prompts also appear as commands, named `server:prompt`.
+Custom commands are Markdown files in `.opencli/commands/` (project) or `~/.opencli/commands/` (user). `$ARGUMENTS` is replaced by the text after the command name. A frontmatter line `allowed-tools: read_file, grep_files` restricts the tools for that turn. MCP prompts also appear as commands, named `server:prompt`.
 
 ## Tools
 
@@ -133,7 +198,7 @@ Custom commands are Markdown files in `.llmcli/commands/` (project) or `~/.llmcl
 
 ## Headless use and exit codes
 
-With `-p`, llmcli runs one task and exits. `--output-format json` prints one result object; `stream-json` prints one event per line.
+With `-p`, opencli runs one task and exits. `--output-format json` prints one result object; `stream-json` prints one event per line.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -163,19 +228,13 @@ The eval suite is 30 small coding tasks checked by their results on disk, not by
 | `src/execute.ts` | Single path for every tool call: validation, permissions, approval, hooks |
 | `src/permissions.ts`, `src/shell-guard.ts`, `src/net-guard.ts`, `src/sandbox.ts` | Safety |
 | `src/tools/` | Tool implementations |
-| `src/model/` | OpenAI-compatible and Anthropic providers, retries, text tool-call fallback |
+| `src/model/` | OpenAI-compatible, Azure, and Anthropic providers, retries, text tool-call fallback |
 | `src/mcp/` | MCP stdio client and manager |
 | `src/ui/` | Plain text, JSON, TUI and REPL front ends |
 | `tests/`, `evals/` | Tests and the eval suite |
 
 ## Status
 
-Verified: the unit and end-to-end test suite (187 tests), and a live one-shot task against `gemma4:31b` through the print path.
+This is a development project. Tests use fake model servers; passing them does not establish live provider compatibility. Before a release, validate the standalone binary, interactive TUI, supported sandbox backends, and live local and cloud deployments in the target environment. Model evals require a running endpoint and may incur charges.
 
-Not yet verified:
-- The standalone binary (`bun run build`). The build step has not been run in this environment.
-- The full-screen TUI. It has not been exercised interactively.
-- The Linux `bwrap` sandbox. It has no test coverage on Linux.
-- Anthropic against the live API. The provider is tested against a local fake server only.
-
-Planned work is in `PLAN.md`.
+Current implementation work and verification gates are in [PLAN.md](PLAN.md). Future features in [COMPREHENSIVE_PLAN.md](COMPREHENSIVE_PLAN.md) are roadmap targets rather than supported commands.

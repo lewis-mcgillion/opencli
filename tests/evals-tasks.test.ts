@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { tasks, type EvalTask } from "../evals/tasks.ts";
+import { commandShell } from "../src/system-shell";
 
 type Files = Record<string, string>;
 type Solution = (original: Files) => Files;
@@ -51,7 +52,7 @@ const solutions: Record<string, Solution> = {
   }),
 
   // create
-  "create-hello-txt": () => ({ "hello.txt": "Hello, llmcli!\n" }),
+  "create-hello-txt": () => ({ "hello.txt": "Hello, opencli!\n" }),
   "create-slugify-module": () => ({
     "slug.ts": L(
       "export function slugify(s: string): string {",
@@ -140,11 +141,11 @@ function write(dir: string, files: Files): void {
 
 // Builds the starting state for a task, optionally applying a solution on top.
 function materialize(task: EvalTask, solution?: Solution): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llmcli-task-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opencli-task-test-"));
   made.push(dir);
   write(dir, task.files);
   if (task.setup) {
-    const p = Bun.spawnSync(["/bin/zsh", "-c", task.setup], { cwd: dir, stdout: "ignore", stderr: "ignore" });
+    const p = Bun.spawnSync([commandShell(), "-c", task.setup], { cwd: dir, stdout: "ignore", stderr: "ignore" });
     expect(p.exitCode).toBe(0);
   }
   if (solution) write(dir, solution(task.files));

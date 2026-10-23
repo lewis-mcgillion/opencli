@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
-// llmcli eval runner. Runs each task in a fresh temp dir through the agent CLI,
+// opencli eval runner. Runs each task in a fresh temp dir through the agent CLI,
 // then checks the files on disk. Usage: bun run evals/run.ts --help
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { tasks as allTasks, type EvalTask } from "./tasks.ts";
+import { commandShell } from "../src/system-shell.ts";
 
 const EVALS_DIR = import.meta.dir;
 const REPO_DIR = path.resolve(EVALS_DIR, "..");
@@ -13,13 +14,13 @@ const RESULTS_ROOT = path.join(EVALS_DIR, "results");
 
 const USAGE = `Usage: bun run evals/run.ts [options]
 
-Runs the llmcli eval tasks (evals/tasks.ts) against a model and reports pass rate.
+Runs the opencli eval tasks (evals/tasks.ts) against a model and reports pass rate.
 
 Options:
   --model <name>       Model name (default: gemma4:31b)
   --url <url>          OpenAI-compatible endpoint; passed to the CLI only when given
                        (default: the CLI's own default)
-  --provider <p>       openai | anthropic; passed to the CLI only when given
+  --provider <p>       openai | anthropic | azure; passed to the CLI only when given
   --filter <substring> Run only task ids containing this substring
   --max-turns <n>      Turn budget per task (default: 40)
   --timeout <seconds>  Wall-clock limit per task (default: 600)
@@ -36,7 +37,7 @@ class UsageError extends Error {}
 interface Options {
   model: string;
   url?: string;
-  provider?: "openai" | "anthropic";
+  provider?: "openai" | "anthropic" | "azure";
   filter?: string;
   maxTurns: number;
   timeout: number;
@@ -106,7 +107,7 @@ function parseArgs(argv: string[]): Options | "help" {
         break;
       case "--provider": {
         const p = take(i, a);
-        if (p !== "openai" && p !== "anthropic") throw new UsageError(`--provider must be openai or anthropic`);
+        if (p !== "openai" && p !== "anthropic" && p !== "azure") throw new UsageError(`--provider must be openai, anthropic or azure`);
         opts.provider = p;
         i++;
         break;
@@ -179,14 +180,14 @@ function writeTaskFiles(dir: string, files: Record<string, string>): void {
 }
 
 async function runSetup(command: string, dir: string): Promise<{ ok: boolean; reason: string }> {
-  const proc = Bun.spawn(["/bin/zsh", "-c", command], { cwd: dir, stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+  const proc = Bun.spawn([commandShell(), "-c", command], { cwd: dir, stdin: "ignore", stdout: "ignore", stderr: "pipe" });
   const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
   if (code === 0) return { ok: true, reason: "" };
   return { ok: false, reason: `setup failed (exit ${code}): ${stderr.trim().slice(0, 200)}` };
 }
 
 async function runTask(task: EvalTask, opts: Options, logDir: string, keep: boolean): Promise<TaskResult> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llmcli-eval-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opencli-eval-"));
   const logPath = path.join(logDir, `${task.id}.log`);
   const base: TaskResult = {
     id: task.id,

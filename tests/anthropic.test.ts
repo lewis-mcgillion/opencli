@@ -218,7 +218,10 @@ test("retries a 503 and reports the retry via onRetry", async () => {
   });
 
   expect(srv.calls).toHaveLength(2);
-  expect(retries).toEqual([{ attempt: 2, reason: "HTTP 503" }]);
+  expect(retries).toHaveLength(1);
+  expect(retries[0].attempt).toBe(2);
+  expect(retries[0].reason).toContain("HTTP 503");
+  expect(retries[0].reason).toContain("backing off");
   expect(result.message.content).toBe("ok");
 });
 

@@ -7,5 +7,5 @@ export function createProvider(cfg: Config): ModelProvider {
   if (cfg.provider === "anthropic") {
     return createAnthropicProvider({ url: cfg.url, apiKey: cfg.apiKey, maxTokens: cfg.maxOutputTokens });
   }
-  return createOpenAIProvider({ url: cfg.url, apiKey: cfg.apiKey });
+  return createOpenAIProvider({ url: cfg.url, apiKey: cfg.apiKey, azure: cfg.provider === "azure" });
 }

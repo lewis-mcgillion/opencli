@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { HookSpec } from "./config";
+import { shellCommand } from "./system-shell";
 
 export interface HookPayload {
   event: "pre_tool" | "post_tool" | "on_stop";
@@ -18,7 +19,8 @@ export interface HookRun {
 
 export function runHook(spec: HookSpec, payload: HookPayload, timeoutMs = 30000): Promise<HookRun> {
   return new Promise((resolve) => {
-    const child = spawn("/bin/zsh", ["-c", spec.command], { cwd: payload.cwd, env: { ...process.env, LLMCLI_EVENT: payload.event } });
+    const [file, args] = shellCommand(spec.command);
+    const child = spawn(file, args, { cwd: payload.cwd, env: { ...process.env, OPENCLI_EVENT: payload.event, LLMCLI_EVENT: payload.event } });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
@@ -29,6 +31,7 @@ export function runHook(spec: HookSpec, payload: HookPayload, timeoutMs = 30000)
       clearTimeout(timer);
       resolve({ code: code ?? 1, stdout, stderr });
     });
+    child.stdin.on("error", () => {});
     child.stdin.end(JSON.stringify(payload));
   });
 }

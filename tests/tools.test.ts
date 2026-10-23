@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { executeTool } from "../src/execute";
@@ -131,6 +131,22 @@ describe("read and search tools", () => {
 });
 
 describe("shell tools", () => {
+  for (const [name, args] of [
+    ["run_bash", { command: "echo must-not-run > escaped.txt" }],
+    ["run_bash", { command: "echo must-not-run > escaped.txt", background: true }],
+    ["git", { args: "status" }],
+  ] as const) {
+    test(`${name}${"background" in args ? " background" : ""} refuses execution when sandbox is required but unavailable`, async () => {
+      const rt = makeRuntime(dir, recordingUi(null), { mode: "auto", config: { sandbox: { enabled: true, network: false, writable: [] } } });
+      rt.sandbox = { backend: null, active: false, reason: "Linux namespace probe failed" };
+      const result = await call(rt, name, args);
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("sandbox is required but unavailable");
+      expect(result.output).toContain("Linux namespace probe failed");
+      expect(fs.existsSync(path.join(dir, "escaped.txt"))).toBe(false);
+    });
+  }
+
   test("run_bash runs safe commands without approval", async () => {
     const ui = recordingUi(null);
     const rt = makeRuntime(dir, ui);
@@ -167,6 +183,33 @@ describe("shell tools", () => {
 });
 
 describe("web tool", () => {
+  test("web private-address policy applies even when shell sandbox networking is enabled", async () => {
+    const rt = makeRuntime(dir, recordingUi(null), { config: { sandbox: { enabled: false, network: true, writable: [] } } });
+    const result = await call(rt, "web_fetch", { url: "http://127.0.0.1:9/" });
+    expect(result.denied).toBe(true);
+  });
+
+  test("web redirect policy rechecks private targets before fetching the next hop", async () => {
+    const fetchMock = spyOn(globalThis as any, "fetch").mockImplementation(async () => new Response(null, {
+      status: 302,
+      headers: { location: "http://127.0.0.1:9/private" },
+    }));
+    try {
+      const rt = makeRuntime(dir, recordingUi(null));
+      const result = await call(rt, "web_fetch", { url: "http://8.8.8.8/public" });
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("private or local address");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("web deny rules take precedence over explicit private-network allow rules", async () => {
+    const rt = makeRuntime(dir, recordingUi(null), { config: { permissions: { allow: ["web_fetch(*)"], ask: [], deny: ["web_fetch(http://127.0.0.1:9/*)"] } } });
+    expect((await call(rt, "web_fetch", { url: "http://127.0.0.1:9/private" })).denied).toBe(true);
+  });
+
   test("refuses loopback without an allow rule", async () => {
     const rt = makeRuntime(dir, recordingUi(null));
     const result = await call(rt, "web_fetch", { url: "http://127.0.0.1:9/" });
@@ -174,7 +217,7 @@ describe("web tool", () => {
     expect(result.output).toContain("private");
   });
 
-  test("an explicit allow rule lets the request through the private check", async () => {
+  test("web explicit allow permits private HTTP independently of shell sandbox.network false", async () => {
     const server = Bun.serve({ port: 0, fetch: () => new Response("<html><body><p>hello   there</p></body></html>", { headers: { "content-type": "text/html" } }) });
     try {
       const rt = makeRuntime(dir, recordingUi(null), { config: { permissions: { allow: [`web_fetch(http://127.0.0.1:${server.port}/*)`], ask: [], deny: [] } } });

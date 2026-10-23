@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { runTurn } from "../src/agent";
 import { loadConfig } from "../src/config";
 import { createOpenAIProvider } from "../src/model/openai";
@@ -9,6 +10,7 @@ import { buildRepoMap } from "../src/repomap";
 import { loadCustomCommands, parseFrontmatter } from "../src/commands/custom";
 import { validateSessionName } from "../src/session";
 import { planCommand, sandboxStatus } from "../src/sandbox";
+import { commandShell } from "../src/system-shell";
 import { runSubagent } from "../src/agent";
 import { startFakeModel, type FakeModel, type ScriptStep } from "./helpers/fake-model";
 import { makeConfig, makeRuntime, recordingUi, tempDir } from "./helpers/runtime";
@@ -39,6 +41,112 @@ function withFake(script: ScriptStep[], body: (fake: FakeModel, rt: Runtime) => 
 
 describe("sandbox", () => {
   const macOnly = process.platform === "darwin" ? test : test.skip;
+  const cfg = { enabled: "auto" as const, network: false, writable: [] as string[] };
+  const linuxStatus = process.platform === "linux" ? sandboxStatus(cfg) : null;
+  const linuxOnly = linuxStatus?.active ? test : test.skip;
+
+  test("Linux status is unavailable when bwrap is missing", () => {
+    const status = sandboxStatus(cfg, "linux", { findExecutable: () => null });
+    expect(status.active).toBe(false);
+    expect(status.backend).toBeNull();
+    expect(status.reason).toContain("bwrap not found");
+  });
+
+  test("Linux status fails closed when installed bwrap cannot create namespaces", () => {
+    const status = sandboxStatus({ ...cfg, enabled: true }, "linux", {
+      findExecutable: () => "/usr/bin/bwrap",
+      probeBubblewrap: () => "Operation not permitted",
+    });
+    expect(status.active).toBe(false);
+    expect(status.backend).toBeNull();
+    expect(status.reason).toContain("startup probe failed (Operation not permitted)");
+    expect(status.reason).toContain("sandbox was required");
+  });
+
+  test("Linux status probes the selected network policy before reporting active", () => {
+    let probedNetwork: boolean | undefined;
+    const status = sandboxStatus({ ...cfg, network: true }, "linux", {
+      findExecutable: () => "/usr/bin/bwrap",
+      probeBubblewrap: (file, policy) => {
+        expect(file).toBe("/usr/bin/bwrap");
+        probedNetwork = policy.network;
+        return null;
+      },
+    });
+    expect(probedNetwork).toBe(true);
+    expect(status.active).toBe(true);
+    expect(status.reason).toContain("experimental; startup probe passed");
+  });
+
+  test("disabled and unsupported sandbox states are explicit without probing", () => {
+    const checks = { findExecutable: () => { throw new Error("must not probe"); } };
+    expect(sandboxStatus({ ...cfg, enabled: false }, "linux", checks).active).toBe(false);
+    expect(sandboxStatus(cfg, "win32", checks).reason).toContain("no sandbox backend on win32");
+    expect(sandboxStatus({ ...cfg, enabled: true }, "win32", checks).reason).toContain("sandbox was required");
+  });
+
+  for (const network of [false, true]) {
+    test(`Linux plan ${network ? "allows" : "isolates"} shell/git network and preserves read-only root`, () => {
+      const writable = tempDir("opencli-writable-");
+      try {
+        const plan = planCommand("git status", dir, { ...cfg, network, writable: [writable] }, { backend: "bwrap", active: true, reason: "injected" });
+        expect(plan.file).toBe("bwrap");
+        expect(plan.sandboxed).toBe(true);
+        expect(plan.args.slice(0, 3)).toEqual(["--ro-bind", "/", "/"]);
+        expect(plan.args.includes("--unshare-net")).toBe(!network);
+        expect(plan.args).toContain("--die-with-parent");
+        expect(plan.args).toContain(writable);
+        expect(plan.args.slice(-3)).toEqual([commandShell(), "-c", "git status"]);
+      } finally {
+        fs.rmSync(writable, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("shared shell resolver falls back to bash or sh when zsh is unavailable", () => {
+    expect(commandShell("/missing/zsh", (file) => file === "/bin/bash")).toBe("/bin/bash");
+    expect(commandShell("/missing/zsh", (file) => file === "/bin/sh")).toBe("/bin/sh");
+    expect(commandShell("/custom/fish", (file) => file === "/custom/fish" || file === "/bin/sh")).toBe("/bin/sh");
+  });
+
+  linuxOnly("Linux bwrap allows project writes and blocks writes outside configured writable roots", async () => {
+    const outside = fs.mkdtempSync(path.join(os.homedir(), ".opencli-sandbox-test-"));
+    try {
+      const rt = makeRuntime(dir, recordingUi(null), { mode: "auto", config: { sandbox: cfg } });
+      rt.sandbox = linuxStatus!;
+      const inside = await executeTool(rt, "run_bash", JSON.stringify({ command: "echo ok > inside.txt && cat inside.txt" }));
+      expect(inside.output).toContain("ok");
+      expect(fs.readFileSync(path.join(dir, "inside.txt"), "utf8")).toBe("ok\n");
+      const escaped = await executeTool(rt, "run_bash", JSON.stringify({ command: `echo bad > '${outside}/escape.txt'` }));
+      expect(escaped.output).toContain("Exit");
+      expect(fs.existsSync(path.join(outside, "escape.txt"))).toBe(false);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  for (const network of [false, true]) {
+    linuxOnly(`Linux bwrap ${network ? "allows" : "blocks"} shell and git access to a local HTTP server`, async () => {
+      let hits = 0;
+      const server = Bun.serve({ port: 0, fetch: () => { hits++; return new Response("reachable", { status: 404 }); } });
+      try {
+        const policy = { ...cfg, network };
+        const rt = makeRuntime(dir, recordingUi(null), { mode: "auto", config: { sandbox: policy } });
+        rt.sandbox = sandboxStatus(policy);
+        expect(rt.sandbox.active).toBe(true);
+        const url = `http://127.0.0.1:${server.port}/`;
+        const script = `fetch(${JSON.stringify(url)}, {signal: AbortSignal.timeout(2000)}).then(r => r.text()).then(console.log).catch(() => process.exit(1))`;
+        const shell = await executeTool(rt, "run_bash", JSON.stringify({ command: `'${process.execPath}' -e '${script}'` }));
+        expect(shell.output.includes("reachable")).toBe(network);
+        const shellHits = hits;
+        await executeTool(rt, "git", JSON.stringify({ args: `-c http.proxy= -c http.connectTimeout=2 ls-remote ${url}` }));
+        expect(hits > shellHits).toBe(network);
+        if (!network) expect(hits).toBe(0);
+      } finally {
+        server.stop(true);
+      }
+    });
+  }
 
   macOnly("blocks writes outside the project and allows writes inside", async () => {
     const outside = path.join(process.env.HOME ?? "/tmp", ".llmcli-escape-test.txt");
@@ -68,7 +176,7 @@ describe("sandbox", () => {
   test("planCommand is unsandboxed when no backend is active", () => {
     const plan = planCommand("echo hi", dir, { enabled: false, network: false, writable: [] }, { backend: null, active: false, reason: "off" });
     expect(plan.sandboxed).toBe(false);
-    expect(plan.file).toBe("/bin/zsh");
+    expect(plan.file).toBe(commandShell());
   });
 });
 
@@ -191,20 +299,38 @@ describe("custom commands and sessions", () => {
   });
 });
 
-test("env vars override settings files, and anthropic gets its default URL", () => {
-  const home = tempDir("llmcli-cfg-home-");
+test("OpenCLI env vars override settings files, and provider defaults are applied", () => {
+  const home = tempDir("opencli-cfg-home-");
   const savedHome = process.env.HOME;
   process.env.HOME = home;
   try {
-    fs.mkdirSync(path.join(dir, ".llmcli"));
-    fs.writeFileSync(path.join(dir, ".llmcli", "settings.json"), JSON.stringify({ model: "from-file", url: "http://file/v1" }));
-    const cfg = loadConfig({ cwd: dir, env: { LLMCLI_MODEL: "from-env", LLMCLI_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "key" }, trustProject: true });
+    fs.mkdirSync(path.join(dir, ".opencli"));
+    fs.writeFileSync(path.join(dir, ".opencli", "settings.json"), JSON.stringify({ model: "from-file", url: "http://file/v1" }));
+    const cfg = loadConfig({ cwd: dir, env: { OPENCLI_MODEL: "from-env", OPENCLI_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "key" }, trustProject: true });
     expect(cfg.model).toBe("from-env");
     expect(cfg.url).toBe("http://file/v1");
     expect(cfg.provider).toBe("anthropic");
     expect(cfg.apiKey).toBe("key");
-    const defaults = loadConfig({ cwd: tempDir("llmcli-cfg-empty-"), env: { LLMCLI_PROVIDER: "anthropic" } });
-    expect(defaults.url).toBe("https://api.anthropic.com/v1");
+    const anthropic = loadConfig({ cwd: tempDir("opencli-cfg-empty-"), env: { OPENCLI_PROVIDER: "anthropic" } });
+    expect(anthropic.url).toBe("https://api.anthropic.com/v1");
+    const azure = loadConfig({ cwd: tempDir("opencli-cfg-azure-"), env: { OPENCLI_PROVIDER: "azure", AZURE_OPENAI_API_KEY: "az" } });
+    expect(azure.url).toBe("https://YOUR-RESOURCE.openai.azure.com/openai/v1");
+    expect(azure.apiKey).toBe("az");
+  } finally {
+    process.env.HOME = savedHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("legacy LLMCLI settings remain a fallback", () => {
+  const home = tempDir("llmcli-cfg-home-");
+  const savedHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    fs.mkdirSync(path.join(home, ".llmcli"));
+    fs.writeFileSync(path.join(home, ".llmcli", "config.json"), JSON.stringify({ model: "legacy-model" }));
+    const cfg = loadConfig({ cwd: tempDir("opencli-legacy-empty-"), env: {} });
+    expect(cfg.model).toBe("legacy-model");
   } finally {
     process.env.HOME = savedHome;
     fs.rmSync(home, { recursive: true, force: true });

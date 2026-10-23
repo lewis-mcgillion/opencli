@@ -74,7 +74,7 @@ export class McpClient {
       await this.rawRequest(session, "initialize", {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: "llmcli", version: "0.3.0" },
+        clientInfo: { name: "opencli", version: "0.3.0" },
       });
       this.notify(session, "notifications/initialized", {});
     } catch (e: any) {

@@ -4,7 +4,7 @@ import { MAX_TOOL_CHARS } from "./execute";
 
 export function buildSystemPrompt(opts: { cwd: string; sandboxNote: string; repoMap?: string }): string {
   const parts = [
-    `You are llmcli, an interactive CLI agent that helps users with software engineering tasks. You run on the user's machine and act through tools. Use the instructions below and your tools to assist the user.
+    `You are OpenCLI, an interactive CLI agent that helps users with software engineering tasks. You run on the user's machine and act through tools. Use the instructions below and your tools to assist the user.
 
 # Environment
 - Working directory: ${opts.cwd}
@@ -50,7 +50,7 @@ export function buildSystemPrompt(opts: { cwd: string; sandboxNote: string; repo
 
   if (opts.repoMap) parts.push(`# Repository map\nFiles and top-level symbols (generated at startup):\n${opts.repoMap}`);
 
-  for (const name of ["AGENTS.md", "LLMCLI.md"]) {
+  for (const name of ["AGENTS.md", "OPENCLI.md", "LLMCLI.md"]) {
     const file = path.join(opts.cwd, name);
     if (fs.existsSync(file)) {
       parts.push(`# Project instructions (${name})\n${fs.readFileSync(file, "utf-8").trim()}`);

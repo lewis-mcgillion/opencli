@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { mergeModelProfiles, type CustomModelProfile, type ModelProfile, type ProviderName } from "./model/profiles";
 
 export interface McpServerConfig {
   command: string;
@@ -28,8 +29,9 @@ export interface Prices {
 }
 
 export interface Config {
-  provider: "openai" | "anthropic";
+  provider: ProviderName;
   model: string;
+  modelProfiles: Record<string, ModelProfile>;
   url: string;
   apiKey?: string;
   contextWindow: number;
@@ -47,7 +49,8 @@ export interface Config {
   sources: string[];
 }
 
-type RawConfig = Partial<Omit<Config, "permissions" | "hooks" | "sandbox">> & {
+type RawConfig = Partial<Omit<Config, "permissions" | "hooks" | "sandbox" | "modelProfiles">> & {
+  modelProfiles?: Record<string, CustomModelProfile>;
   permissions?: Partial<Permissions>;
   hooks?: Partial<Record<keyof Config["hooks"], HookSpec[]>>;
   sandbox?: Partial<Config["sandbox"]>;
@@ -58,6 +61,7 @@ const TRUST_KEYS = ["mcpServers", "hooks", "verifyCommand", "permissions", "sand
 export const DEFAULTS: Config = {
   provider: "openai",
   model: "gemma4:e4b",
+  modelProfiles: {},
   url: "http://localhost:11434/v1",
   contextWindow: 32768,
   maxOutputTokens: 8192,
@@ -74,7 +78,10 @@ export const DEFAULTS: Config = {
 };
 
 export function userConfigDir(): string {
-  return path.join(process.env.HOME ?? os.homedir(), ".llmcli");
+  const home = process.env.HOME ?? os.homedir();
+  const opencli = path.join(home, ".opencli");
+  if (fs.existsSync(opencli) || !fs.existsSync(path.join(home, ".llmcli"))) return opencli;
+  return path.join(home, ".llmcli");
 }
 
 function readJson(file: string): RawConfig | null {
@@ -122,6 +129,10 @@ function mergeLayer(base: Config, layer: RawConfig, label: string): Config {
   const next: Config = { ...base, sources: [...base.sources, label] };
   if (layer.provider) next.provider = layer.provider;
   if (layer.model) next.model = layer.model;
+  if (layer.modelProfiles !== undefined) {
+    const source = label.startsWith("project") ? "project" : label === "local" ? "local" : "user";
+    next.modelProfiles = mergeModelProfiles(base.modelProfiles, layer.modelProfiles, source);
+  }
   if (layer.url) next.url = layer.url;
   if (layer.apiKey) next.apiKey = layer.apiKey;
   if (layer.contextWindow) next.contextWindow = layer.contextWindow;
@@ -163,8 +174,9 @@ export interface LoadOptions {
 
 export function loadConfig(opts: LoadOptions): Config {
   const userRaw = readJson(path.join(userConfigDir(), "config.json")) ?? {};
-  const projectRaw = readJson(path.join(opts.cwd, ".llmcli", "settings.json")) ?? {};
-  const localRaw = readJson(path.join(opts.cwd, ".llmcli", "settings.local.json"));
+  const settingsDir = projectSettingsDir(opts.cwd);
+  const projectRaw = readJson(path.join(settingsDir, "settings.json")) ?? {};
+  const localRaw = readJson(path.join(settingsDir, "settings.local.json"));
 
   const hasProjectLayer = Object.keys(projectRaw).length > 0 || localRaw !== null;
   const fingerprint = projectFingerprint(projectRaw, localRaw);
@@ -178,12 +190,17 @@ export function loadConfig(opts: LoadOptions): Config {
   }
 
   const env = opts.env;
-  if (env.LLMCLI_MODEL) cfg.model = env.LLMCLI_MODEL;
-  if (env.LLMCLI_URL) cfg.url = env.LLMCLI_URL;
-  if (env.LLMCLI_PROVIDER === "openai" || env.LLMCLI_PROVIDER === "anthropic") cfg.provider = env.LLMCLI_PROVIDER;
-  const keyFromEnv = env.LLMCLI_API_KEY ?? (cfg.provider === "anthropic" ? env.ANTHROPIC_API_KEY : env.OPENAI_API_KEY);
+  if (env.OPENCLI_MODEL ?? env.LLMCLI_MODEL) cfg.model = env.OPENCLI_MODEL ?? env.LLMCLI_MODEL!;
+  if (env.OPENCLI_URL ?? env.LLMCLI_URL) cfg.url = env.OPENCLI_URL ?? env.LLMCLI_URL!;
+  const providerEnv = env.OPENCLI_PROVIDER ?? env.LLMCLI_PROVIDER;
+  if (providerEnv === "openai" || providerEnv === "anthropic" || providerEnv === "azure") cfg.provider = providerEnv;
+  const keyFromEnv =
+    env.OPENCLI_API_KEY ??
+    env.LLMCLI_API_KEY ??
+    (cfg.provider === "anthropic" ? env.ANTHROPIC_API_KEY : cfg.provider === "azure" ? env.AZURE_OPENAI_API_KEY : env.OPENAI_API_KEY);
   if (keyFromEnv) cfg.apiKey = keyFromEnv;
   if (cfg.provider === "anthropic" && cfg.url === DEFAULTS.url) cfg.url = "https://api.anthropic.com/v1";
+  if (cfg.provider === "azure" && cfg.url === DEFAULTS.url) cfg.url = "https://YOUR-RESOURCE.openai.azure.com/openai/v1";
 
   return { ...cfg, trusted, projectTrustNeeded: hasProjectLayer && !trusted, sources: cfg.sources };
 }
@@ -199,7 +216,14 @@ function stripExecutable(raw: RawConfig): RawConfig {
 }
 
 export function projectFingerprintFor(cwd: string): string {
-  const projectRaw = readJson(path.join(cwd, ".llmcli", "settings.json")) ?? {};
-  const localRaw = readJson(path.join(cwd, ".llmcli", "settings.local.json"));
+  const settingsDir = projectSettingsDir(cwd);
+  const projectRaw = readJson(path.join(settingsDir, "settings.json")) ?? {};
+  const localRaw = readJson(path.join(settingsDir, "settings.local.json"));
   return projectFingerprint(projectRaw, localRaw);
+}
+
+export function projectSettingsDir(cwd: string): string {
+  const opencli = path.join(cwd, ".opencli");
+  if (fs.existsSync(opencli) || !fs.existsSync(path.join(cwd, ".llmcli"))) return opencli;
+  return path.join(cwd, ".llmcli");
 }

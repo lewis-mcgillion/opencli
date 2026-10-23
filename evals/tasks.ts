@@ -1,4 +1,4 @@
-// Eval task definitions for llmcli. Each task seeds a temp dir, runs the agent,
+// Eval task definitions for opencli. Each task seeds a temp dir, runs the agent,
 // then judges the files on disk with check(dir). Checks never look at model text.
 import fs from "node:fs";
 import path from "node:path";
@@ -273,9 +273,9 @@ export const tasks: EvalTask[] = [
   {
     id: "create-hello-txt",
     category: "create",
-    prompt: "Create a file named hello.txt in the current directory whose entire content is the single line: Hello, llmcli!",
+    prompt: "Create a file named hello.txt in the current directory whose entire content is the single line: Hello, opencli!",
     files: {},
-    check: (dir) => text(dir, "hello.txt").trim() === "Hello, llmcli!",
+    check: (dir) => text(dir, "hello.txt").trim() === "Hello, opencli!",
   },
   {
     id: "create-slugify-module",

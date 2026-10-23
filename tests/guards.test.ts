@@ -75,6 +75,16 @@ describe("network guard", () => {
     expect((await checkUrl("http://169.254.169.254/latest/meta-data")).ok).toBe(false);
     expect((await checkUrl("not a url")).ok).toBe(false);
   });
+  test("web policy rejects a hostname if any DNS answer is private", async () => {
+    const result = await checkUrl("https://example.test/", async () => ["8.8.8.8", "192.168.1.1"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("192.168.1.1");
+  });
+  test("web policy fails closed on DNS failure or empty answers", async () => {
+    expect((await checkUrl("https://example.test/", async () => [])).ok).toBe(false);
+    expect((await checkUrl("https://example.test/", async () => { throw new Error("DNS unavailable"); })).ok).toBe(false);
+    expect((await checkUrl("https://example.test/", async () => ["8.8.8.8", "2606:4700:4700::1111"])).ok).toBe(true);
+  });
 });
 
 describe("permissions", () => {

@@ -5,6 +5,7 @@ import { readSse } from "./sse";
 export interface OpenAIOptions {
   url: string;
   apiKey?: string;
+  azure?: boolean;
 }
 
 export function createOpenAIProvider(opts: OpenAIOptions): ModelProvider {
@@ -12,7 +13,10 @@ export function createOpenAIProvider(opts: OpenAIOptions): ModelProvider {
     name: "openai",
     async chat(req: ChatRequest): Promise<ChatResult> {
       const headers: Record<string, string> = {};
-      if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
+      if (opts.apiKey) {
+        if (opts.azure) headers["api-key"] = opts.apiKey;
+        else headers.Authorization = `Bearer ${opts.apiKey}`;
+      }
       const body = {
         model: req.model,
         messages: req.messages,

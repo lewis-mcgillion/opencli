@@ -86,7 +86,7 @@ export function runRepl(app: App, opts: { modelLabel: string }): void {
     process.stdout.write(PROMPT);
   };
 
-  console.log(`${ansi.cyan("llmcli")}  model: ${ansi.yellow(opts.modelLabel)}  mode: ${rt.state.mode}  sandbox: ${rt.sandbox.active ? rt.sandbox.backend : "off"}`);
+  console.log(`${ansi.cyan("opencli")}  model: ${ansi.yellow(opts.modelLabel)}  mode: ${rt.state.mode}  sandbox: ${rt.sandbox.active ? rt.sandbox.backend : "off"}`);
   console.log("Type /help for commands, /paste for multi-line input.\n");
 
   rl.on("line", (raw) => {

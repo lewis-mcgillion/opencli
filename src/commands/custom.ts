@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { userConfigDir } from "../config";
+import { projectSettingsDir, userConfigDir } from "../config";
 import type { Command, CommandResult } from "./index";
 
 export function parseFrontmatter(text: string): { meta: Record<string, string>; body: string } {
@@ -22,7 +22,7 @@ function commandFiles(dir: string): string[] {
 export function loadCustomCommands(cwd: string, builtinNames: Set<string>): Command[] {
   const seen = new Set<string>(builtinNames);
   const commands: Command[] = [];
-  const dirs = [path.join(cwd, ".llmcli", "commands"), path.join(userConfigDir(), "commands")];
+  const dirs = [path.join(projectSettingsDir(cwd), "commands"), path.join(userConfigDir(), "commands")];
   for (const dir of dirs) {
     for (const file of commandFiles(dir)) {
       const name = path.basename(file, ".md");

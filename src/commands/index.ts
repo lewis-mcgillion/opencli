@@ -43,7 +43,7 @@ export function builtinCommands(): Command[] {
         const m = arg.trim();
         if (!m) return `mode: ${rt.state.mode}`;
         if (!MODES.includes(m as Mode)) return "Error: mode must be regular, plan, or auto";
-        if (m === "auto" && !allowAuto) return "Error: auto mode approves every action. Start llmcli with --allow-auto to enable it.";
+        if (m === "auto" && !allowAuto) return "Error: auto mode approves every action. Start opencli with --allow-auto to enable it.";
         rt.state.mode = m as Mode;
         return `mode set to ${m}`;
       },

@@ -14,6 +14,8 @@ import { TuiUi, runTui } from "./ui/tui";
 import type { Mode, OutputFormat, Ui } from "./types";
 import type { TurnResult } from "./agent";
 import type { App } from "./app";
+import { createProvider } from "./model";
+import { findModelProfile, resolveProfileConfig, renderProfiles } from "./model/profiles";
 
 export const VERSION = "0.3.0";
 
@@ -53,12 +55,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { flags, positional };
 }
 
-const USAGE = `llmcli ${VERSION} - terminal coding agent
+const USAGE = `opencli ${VERSION} - terminal coding agent
 
 Usage:
-  llmcli                         interactive UI (TUI on a terminal)
-  llmcli [options] "prompt"      run one task and exit
-  echo "prompt" | llmcli -p      read the task from stdin
+  opencli                        interactive UI (TUI on a terminal)
+  opencli [options] "prompt"     run one task and exit
+  echo "prompt" | opencli -p     read the task from stdin
+  opencli models list            list built-in and custom profiles
+  opencli models show <profile>  show profile metadata as JSON
+  opencli models test <profile>  test a profile with the resolved config
 
 Options:
   -p, --print                    non-interactive run
@@ -67,7 +72,8 @@ Options:
   --allow-auto                   allow auto mode
   --model <name>                 model to use
   --url <url>                    OpenAI- or Anthropic-compatible base URL
-  --provider <openai|anthropic>  API flavour
+  --provider <openai|anthropic|azure>
+                                  API flavour
   --max-turns <n>                steps per task (default 40)
   --max-cost <usd>               stop when estimated cost reaches this (needs prices in config)
   --allowed-tools <a,b>          restrict tools for this run
@@ -170,7 +176,9 @@ function interactiveUi(useTui: boolean): { ui: Ui; tui?: TuiUi } {
 }
 
 async function main(): Promise<number> {
-  const { flags, positional } = parseArgs(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === "models") return await runModelsCommand(rawArgs.slice(1));
+  const { flags, positional } = parseArgs(rawArgs);
   if (flags.version) { console.log(VERSION); return 0; }
   if (flags.help) { console.log(USAGE); return 0; }
   if (typeof flags.expand === "string") {
@@ -182,7 +190,7 @@ async function main(): Promise<number> {
   const interactiveTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   let config: Config = loadConfig({ cwd, env: process.env });
   if (config.projectTrustNeeded) {
-    if (interactiveTerminal && (await confirm(`This project defines MCP servers, hooks, permissions, sandbox settings or a verify command (${cwd}/.llmcli). Trust them?`))) {
+    if (interactiveTerminal && (await confirm(`This project defines MCP servers, hooks, permissions, sandbox settings or a verify command (${cwd}/.opencli or .llmcli). Trust them?`))) {
       trustProject(cwd, projectFingerprintFor(cwd));
       config = loadConfig({ cwd, env: process.env, trustProject: true });
     } else {
@@ -193,8 +201,8 @@ async function main(): Promise<number> {
   if (typeof flags.model === "string") config.model = flags.model;
   if (typeof flags.url === "string") config.url = flags.url;
   if (typeof flags.provider === "string") {
-    if (flags.provider !== "openai" && flags.provider !== "anthropic") throw new Error("--provider must be openai or anthropic");
-    config.provider = flags.provider;
+    if (flags.provider !== "openai" && flags.provider !== "anthropic" && flags.provider !== "azure") throw new Error("--provider must be openai, anthropic or azure");
+    config.provider = flags.provider as Config["provider"];
   }
   if (flags["no-sandbox"]) config.sandbox = { ...config.sandbox, enabled: false };
   if (flags["no-repo-map"]) config.repoMap = false;
@@ -276,11 +284,38 @@ async function main(): Promise<number> {
   return -1;
 }
 
+async function runModelsCommand(args: string[]): Promise<number> {
+  const sub = args[0] ?? "list";
+  if (!["list", "show", "test"].includes(sub)) throw new Error("models command must be list, show or test");
+  const base = loadConfig({ cwd: process.cwd(), env: process.env });
+  if (sub === "list") {
+    console.log(renderProfiles(base.modelProfiles));
+    return 0;
+  }
+  const profileId = args[1];
+  if (!profileId) throw new Error(`models ${sub} needs a profile id`);
+  const profile = findModelProfile(profileId, base.modelProfiles);
+  if (!profile) throw new Error(`unknown model profile ${profileId}`);
+  if (sub === "show") {
+    console.log(JSON.stringify(profile, null, 2));
+    return 0;
+  }
+  const config = resolveProfileConfig(base, profile, process.env);
+  const result = await createProvider(config).chat({
+    model: config.model,
+    messages: [{ role: "user", content: "Reply with exactly: ok" }],
+    tools: [],
+  });
+  console.log(`${profile.id}: ${result.message.content?.trim() || "ok"}`);
+  return 0;
+
+}
+
 main()
   .then((code) => {
     if (code >= 0) process.exitCode = code;
   })
   .catch((e) => {
-    process.stderr.write(`${ansi.red(`llmcli: ${e instanceof Error ? e.message : String(e)}`)}\n`);
+    process.stderr.write(`${ansi.red(`opencli: ${e instanceof Error ? e.message : String(e)}`)}\n`);
     exitWith(1);
   });

@@ -62,7 +62,7 @@ export function runTui(app: App, ui: TuiUi, modelLabel: string): void {
   const blessed = require("blessed") as any;
   const { rt, commands, env } = app;
 
-  const screen = blessed.screen({ smartCSR: true, title: "llmcli", fullUnicode: true });
+  const screen = blessed.screen({ smartCSR: true, title: "opencli", fullUnicode: true });
   const logBox = blessed.log({
     top: 0, left: 0, right: 0, bottom: 6,
     border: { type: "line" },
@@ -97,7 +97,7 @@ export function runTui(app: App, ui: TuiUi, modelLabel: string): void {
     const color = rt.state.mode === "auto" ? "red" : rt.state.mode === "plan" ? "yellow" : "green";
     const sandbox = rt.sandbox.active ? "sandbox" : "no sandbox";
     statusBar.setContent(
-      ` ${spin}{cyan-fg}llmcli{/}  model:{yellow-fg}${modelLabel}{/}  {${color}-fg}[${rt.state.mode.toUpperCase()}]{/}  ${sandbox}  {grey-fg}^C:cancel  ^D:exit  S-Tab:mode  Enter:send{/}`,
+      ` ${spin}{cyan-fg}opencli{/}  model:{yellow-fg}${modelLabel}{/}  {${color}-fg}[${rt.state.mode.toUpperCase()}]{/}  ${sandbox}  {grey-fg}^C:cancel  ^D:exit  S-Tab:mode  Enter:send{/}`,
     );
     screen.render();
   };
@@ -182,7 +182,7 @@ export function runTui(app: App, ui: TuiUi, modelLabel: string): void {
   screen.key(["pagedown"], () => { logBox.scroll(logBox.height as number); screen.render(); });
 
   inputBox.focus();
-  ui.info(`llmcli  model: ${modelLabel}  mode: ${rt.state.mode}\nType /help for commands. Enter to send.\n`);
+  ui.info(`opencli  model: ${modelLabel}  mode: ${rt.state.mode}\nType /help for commands. Enter to send.\n`);
   updateStatus();
   screen.render();
 }

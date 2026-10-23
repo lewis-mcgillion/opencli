@@ -12,10 +12,10 @@ interface Run {
   stderr: string;
 }
 
-async function runCli(args: string[], opts: { cwd: string; home: string; stdin?: string }): Promise<Run> {
+async function runCli(args: string[], opts: { cwd: string; home: string; stdin?: string; env?: NodeJS.ProcessEnv }): Promise<Run> {
   const proc = Bun.spawn([process.execPath, "run", MAIN, ...args], {
     cwd: opts.cwd,
-    env: { ...process.env, HOME: opts.home, LLMCLI_MODEL: "test-model", LLMCLI_URL: "" },
+    env: { ...process.env, HOME: opts.home, LLMCLI_MODEL: "test-model", LLMCLI_URL: "", ...opts.env },
     stdin: opts.stdin !== undefined ? new Blob([opts.stdin]) : "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -196,7 +196,75 @@ describe("configuration trust", () => {
 describe("entry points", () => {
   test("--version and --help work without a model", async () => {
     expect((await runCli(["--version"], { cwd: project, home })).stdout.trim()).toBe("0.3.0");
-    expect((await runCli(["--help"], { cwd: project, home })).stdout).toContain("Exit codes");
+    const help = (await runCli(["--help"], { cwd: project, home })).stdout;
+    expect(help).toContain("opencli");
+    expect(help).toContain("Exit codes");
+  });
+
+  test("models list shows provider profiles", async () => {
+    const run = await runCli(["models", "list"], { cwd: project, home });
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("azure-openai");
+    expect(run.stdout).toContain("local-openai");
+  });
+
+  test("models list and show include persisted custom profiles and source metadata", async () => {
+    const dir = tempDir("opencli-models-");
+    const profileHome = tempDir("opencli-models-home-");
+    try {
+      fs.mkdirSync(path.join(profileHome, ".opencli"));
+      fs.mkdirSync(path.join(dir, ".opencli"));
+      fs.writeFileSync(path.join(profileHome, ".opencli", "config.json"), JSON.stringify({ modelProfiles: { personal: { url: "http://localhost:9000/v1" } } }));
+      fs.writeFileSync(path.join(dir, ".opencli", "settings.json"), JSON.stringify({ modelProfiles: { foundry: { provider: "azure", model: "deployment", apiKeyEnv: "FOUNDRY_KEY", contextWindow: 96000 } } }));
+      const opts = { cwd: dir, home: profileHome, env: { FOUNDRY_KEY: "never-display-this-secret" } };
+      const list = await runCli(["models", "list"], opts);
+      expect(list.code).toBe(0);
+      expect(list.stdout).toContain("builtin");
+      expect(list.stdout).toContain("personal");
+      expect(list.stdout).toContain("user");
+      expect(list.stdout).toContain("foundry");
+      expect(list.stdout).toContain("project");
+      const shown = await runCli(["models", "show", "foundry"], opts);
+      expect(shown.code).toBe(0);
+      expect(JSON.parse(shown.stdout)).toMatchObject({ id: "foundry", source: "project", provider: "azure", model: "deployment", apiKeyEnv: "FOUNDRY_KEY", contextWindow: 96000 });
+      expect(shown.stdout).not.toContain("never-display-this-secret");
+      const builtin = await runCli(["models", "show", "anthropic"], opts);
+      expect(JSON.parse(builtin.stdout).source).toBe("builtin");
+      const missing = await runCli(["models", "show", "unknown"], opts);
+      expect(missing.code).toBe(1);
+      expect(missing.stderr).toContain("unknown model profile unknown");
+      const noId = await runCli(["models", "show"], opts);
+      expect(noId.code).toBe(1);
+      expect(noId.stderr).toContain("models show needs a profile id");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(profileHome, { recursive: true, force: true });
+    }
+  });
+
+  test("models test uses custom Azure deployment and API key environment metadata", async () => {
+    const dir = tempDir("opencli-models-test-");
+    const profileHome = tempDir("opencli-models-test-home-");
+    const seen: { key: string | null; authorization: string | null; body: any }[] = [];
+    const server = Bun.serve({ port: 0, async fetch(req) {
+      seen.push({ key: req.headers.get("api-key"), authorization: req.headers.get("authorization"), body: await req.json() });
+      return new Response('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } });
+    } });
+    try {
+      fs.mkdirSync(path.join(dir, ".opencli"));
+      fs.writeFileSync(path.join(dir, ".opencli", "settings.json"), JSON.stringify({ modelProfiles: { foundry: { provider: "azure", model: "custom-deployment", url: `http://localhost:${server.port}/v1`, apiKeyEnv: "FOUNDRY_KEY" } } }));
+      const run = await runCli(["models", "test", "foundry"], { cwd: dir, home: profileHome, env: { OPENCLI_MODEL: "", LLMCLI_MODEL: "", OPENCLI_URL: "", LLMCLI_URL: "", OPENCLI_API_KEY: "", LLMCLI_API_KEY: "", FOUNDRY_KEY: "azure-secret" } });
+      expect(run.code).toBe(0);
+      expect(run.stdout.trim()).toBe("foundry: ok");
+      expect(seen).toHaveLength(1);
+      expect(seen[0].key).toBe("azure-secret");
+      expect(seen[0].authorization).toBeNull();
+      expect(seen[0].body.model).toBe("custom-deployment");
+    } finally {
+      server.stop(true);
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(profileHome, { recursive: true, force: true });
+    }
   });
 
   test("unknown options fail with exit 1", async () => {
